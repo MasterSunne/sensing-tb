@@ -9,6 +9,8 @@ Features:
   - Logs every incoming JSONL record immediately to a local host backup file
   - Gracefully handles JSON `null` values (renders gaps via NaN instead of crashing)
   - Includes a built-in `--demo` simulator mode to test plots without hardware
+
+* AI was used to create the initial template and demo for this document
 """
 
 import argparse

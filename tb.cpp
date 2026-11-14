@@ -11,6 +11,8 @@
  *     - Channel 2: Water Pot Temperature
  *  5. MicroSD Card Storage                        -> SPI (JSONL Logging)
  *  6. Host PC / Gateway                           -> USB Serial (JSONL Stream)
+ * 
+ ** AI was used to create the initial template for this document
  */
 
 #include <Arduino.h>
