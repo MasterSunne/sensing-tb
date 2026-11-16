@@ -3,15 +3,15 @@
  * @brief Cookstove Data Acquisition (DAQ) Firmware - 2 Hz State Machine
  *
  * Hardware Architecture:
- *  1. Adafruit Temp/Humidity Sensor (SHT31/SHT4x) -> I2C Bus
- *  2. Analog CO Sensor -> 16-bit ADC (ADS1115)    -> Shared I2C Bus
- *  3. Particulate Matter Sensor (SPS30 / PM2.5)   -> Hardware UART
- *  4. Dual-Channel Thermocouple Daughter Board    -> SPI (2x MAX31855)
+ *  1. Adafruit Temp/Humidity Sensor (AHT20)                        -> I2C Bus
+ *  2. Analog CO Sensor (ULPSM-CO 968-001) -> 16-bit ADC (ADS1115)  -> Shared I2C Bus
+ *  3. Particulate Matter Sensor (PM2008M - M)                      -> Hardware UART
+ *  4. Dual-Channel Thermocouple Daughter Board                     -> SPI (MAX31856)
  *     - Channel 1: Firebox Temperature
  *     - Channel 2: Water Pot Temperature
- *  5. MicroSD Card Storage                        -> SPI (JSONL Logging)
- *  6. Host PC / Gateway                           -> USB Serial (JSONL Stream)
- * 
+ *  5. Optional MicroSD Card Storage                                -> SPI (JSONL Logging)
+ *  6. Host PC / Gateway                                            -> USB Serial (JSONL Stream)
+ *   
  ** AI was used to create the initial template for this document
  */
 
@@ -24,7 +24,7 @@
 #include <Adafruit_SHT31.h>      // Adafruit Temp/Humidity (swap for Adafruit_SHT4x if needed)
 #include <Adafruit_ADS1X15.h>    // 16-bit I2C ADC (ADS1115)
 #include <Adafruit_MAX31855.h>   // Thermocouple-to-Digital Daughter Board
-#include <sps30.h>               // Sensirion SPS30 PM2.5 UART Driver
+#include <PMS.h>                 // PMS5003 PM2.5 UART Driver
 
 // ============================================================================
 // 1. PIN & HARDWARE CONFIGURATION MACROS (Edit these to match your wiring)
@@ -41,15 +41,16 @@
 #define CO_ADC_CHANNEL          0         // ADS1115 analog input channel (AIN0)
 
 // --- UART Bus (PM2.5 Sensor) ---
-#define PIN_PM25_UART_RX        16        // MCU RX <- PM2.5 TX
-#define PIN_PM25_UART_TX        17        // MCU TX -> PM2.5 RX
+#define PIN_PM25_UART_RX        0        // MCU RX <- PM2.5 TX
+#define PIN_PM25_UART_TX        1        // MCU TX -> PM2.5 RX
 #define PM25_UART_BAUD          115200    // 115200 for Sensirion SPS30 (use 9600 for PMS5003)
 #define PM25_SERIAL_PORT        Serial1   // Hardware UART instance
 
 // --- SPI Bus (Thermocouple Daughter Board + SD Card) ---
-#define PIN_SPI_SCK             18
-#define PIN_SPI_MISO            19
-#define PIN_SPI_MOSI            23
+#define PIN_SPI_SCK             48
+#define PIN_SPI_MISO            46
+#define PIN_SPI_MOSI            47
+#define PIN_SPI_CS              49         // Default CS pin for SPI devices (override per device below)
 
 // Chip Select (CS) Pins for SPI Peripherals
 #define PIN_TC_FIREBOX_CS       5         // Thermocouple 1: Firebox temp CS
