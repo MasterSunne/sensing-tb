@@ -58,6 +58,14 @@
 #define PIN_TC_WATER_CS         4         // Thermocouple 2: Water temp CS
 #define PIN_SD_CARD_CS          15        // MicroSD card CS for JSONL storage
 
+// Set only the sensor under test to 1 and the others to 0 to exclude disabled
+// sensors from initialization and acquisition.
+#define AHT20_TEST_ENABLE       1
+#define CO_TEST_ENABLE          1
+#define PM25_TEST_ENABLE        1
+#define TC_FIREBOX_TEST_ENABLE  1
+#define TC_WATER_TEST_ENABLE    1
+
 // --- Acquisition Timing & Data Output ---
 #define USB_SERIAL_BAUD         115200    // Baud rate for Python serial readout
 #define SAMPLE_RATE_HZ          2         // Target acquisition frequency (2 Hz)
@@ -166,17 +174,22 @@ void initPeripherals() {
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
     Wire.setClock(I2C_CLOCK_HZ);
 
+#if AHT20_TEST_ENABLE
     if (!aht20.begin(ADDR_TEMP_HUM_SENSOR)) {
         Serial.println("{\"status\":\"warn\",\"msg\":\"AHT20 Temp/Hum not detected on I2C\"}");
     }
+#endif
 
     // Configure ADS1115 gain: GAIN_ONE = +/- 4.096V range (0.125 mV per bit)
+#if CO_TEST_ENABLE
     ads1115.setGain(GAIN_ONE);
     if (!ads1115.begin(ADDR_CO_ADC_16BIT, &Wire)) {
         Serial.println("{\"status\":\"warn\",\"msg\":\"ADS1115 16-bit ADC not detected on I2C\"}");
     }
+#endif
 
     // 3. Initialize UART for PM2.5 sensor (Sensirion SPS30)
+#if PM25_TEST_ENABLE
     PM25_SERIAL_PORT.begin(PM25_UART_BAUD, SERIAL_8N1, PIN_PM25_UART_RX, PIN_PM25_UART_TX);
     sensirion_uart_open();
     if (sps30_probe() == 0) {
@@ -184,6 +197,7 @@ void initPeripherals() {
     } else {
         Serial.println("{\"status\":\"warn\",\"msg\":\"PM2.5 sensor not responding on UART\"}");
     }
+#endif
 
     // 4. Initialize SPI bus for Thermocouple Daughter Board & SD Card
     SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI);
@@ -196,8 +210,12 @@ void initPeripherals() {
     pinMode(PIN_SD_CARD_CS, OUTPUT);
     digitalWrite(PIN_SD_CARD_CS, HIGH);
 
+#if TC_FIREBOX_TEST_ENABLE
     tcFirebox.begin();
+#endif
+#if TC_WATER_TEST_ENABLE
     tcWater.begin();
+#endif
 
     if (SD.begin(PIN_SD_CARD_CS)) {
         sdAvailable = true;
@@ -255,6 +273,7 @@ void loop() {
         // STATE 2: Read Adafruit Temp/Humidity over I2C -> Save to JSONL
         // --------------------------------------------------------------------
         case STATE_READ_SAVE_TEMP_HUM: {
+#if AHT20_TEST_ENABLE
             float ambientTempC = aht20.readTemperature();
             float relativeHumPct = aht20.readHumidity();
 
@@ -263,6 +282,7 @@ void loop() {
 
             saveJsonFloatField("amb_temp_c", ambientTempC, 2, tempValid);
             saveJsonFloatField("amb_rh_pct", relativeHumPct, 2, humValid);
+#endif
 
             currentState = STATE_READ_SAVE_CO_ADC;
             break;
@@ -272,6 +292,7 @@ void loop() {
         // STATE 3: Read Analog CO Sensor via 16-bit I2C ADC -> Save to JSONL
         // --------------------------------------------------------------------
         case STATE_READ_SAVE_CO_ADC: {
+#if CO_TEST_ENABLE
             // Read raw 16-bit signed count and convert to millivolts
             int16_t rawCounts = ads1115.readADC_SingleEnded(CO_ADC_CHANNEL);
             float voltageMv   = ads1115.computeVolts(rawCounts) * 1000.0f;
@@ -281,6 +302,7 @@ void loop() {
 
             saveJsonIntField("co_raw", rawCounts, adcValid);
             saveJsonFloatField("co_mv", voltageMv, 3, adcValid);
+#endif
 
             currentState = STATE_READ_SAVE_PM25;
             break;
@@ -290,6 +312,7 @@ void loop() {
         // STATE 4: Read PM2.5 Sensor over UART -> Save to JSONL
         // --------------------------------------------------------------------
         case STATE_READ_SAVE_PM25: {
+#if PM25_TEST_ENABLE
             struct sps30_measurement pmData;
             uint16_t dataReady = 0;
             bool pmValid = false;
@@ -303,6 +326,7 @@ void loop() {
 
             saveJsonFloatField("pm25_ugm3", pmData.mc_2p5, 2, pmValid);
             saveJsonFloatField("pm10_ugm3", pmData.mc_10p0, 2, pmValid);
+#endif
 
             currentState = STATE_READ_SAVE_THERMOCOUPLES;
             break;
@@ -312,15 +336,18 @@ void loop() {
         // STATE 5: Read Firebox & Water Thermocouples -> Save to JSONL
         // --------------------------------------------------------------------
         case STATE_READ_SAVE_THERMOCOUPLES: {
+#if TC_FIREBOX_TEST_ENABLE
             double fireboxTempC = tcFirebox.readCelsius();
-            double waterTempC   = tcWater.readCelsius();
-
             // MAX31856 returns NAN if thermocouple is open, shorted to GND, or VCC
             bool fireboxValid = !isnan(fireboxTempC);
-            bool waterValid   = !isnan(waterTempC);
-
             saveJsonFloatField("tc_firebox_c", (float)fireboxTempC, 2, fireboxValid);
+#endif
+
+#if TC_WATER_TEST_ENABLE
+            double waterTempC = tcWater.readCelsius();
+            bool waterValid = !isnan(waterTempC);
             saveJsonFloatField("tc_water_c",   (float)waterTempC,   2, waterValid);
+#endif
 
             currentState = STATE_FINALIZE_RECORD;
             break;
