@@ -21,13 +21,14 @@
 #include <SD.h>
 
 // Sensor Libraries (Install via PlatformIO / Arduino Library Manager)
-#include <Adafruit_SHT31.h>      // Adafruit Temp/Humidity (swap for Adafruit_SHT4x if needed)
+#include <Adafruit_AHT20.h>      // Adafruit Temp/Humidity
 #include <Adafruit_ADS1X15.h>    // 16-bit I2C ADC (ADS1115)
-#include <Adafruit_MAX31855.h>   // Thermocouple-to-Digital Daughter Board
+#include <Adafruit_MAX31856.h>   // Thermocouple-to-Digital Daughter Board
 #include <PMS.h>                 // PMS5003 PM2.5 UART Driver
 
+
 // ============================================================================
-// 1. PIN & HARDWARE CONFIGURATION MACROS (Edit these to match your wiring)
+// 1. PIN & HARDWARE CONFIGURATION MACROS
 // ============================================================================
 
 // --- Shared I2C Bus (Temp/Humidity Sensor + 16-bit CO ADC) ---
@@ -36,7 +37,7 @@
 #define I2C_CLOCK_HZ            100000UL  // 100 kHz standard mode for bus reliability
 
 // I2C Device Addresses
-#define ADDR_TEMP_HUM_SENSOR    0x44      // Default Adafruit SHT31/SHT4x address
+#define ADDR_TEMP_HUM_SENSOR    0x44      // Default Adafruit AHT20 address
 #define ADDR_CO_ADC_16BIT       0x48      // Default ADS1115 address (ADDR pin to GND)
 #define CO_ADC_CHANNEL          0         // ADS1115 analog input channel (AIN0)
 
@@ -63,6 +64,7 @@
 #define SAMPLE_PERIOD_MS        (1000UL / SAMPLE_RATE_HZ) // 500 ms per cycle
 #define JSONL_FILE_PATH         "/cookstove_daq.jsonl"
 
+
 // ============================================================================
 // 2. STATE MACHINE & DATA STRUCTURES
 // ============================================================================
@@ -73,13 +75,13 @@
  * fields to the active JSONL file before transitioning to the next state.
  */
 enum DaqState {
-    STATE_IDLE_WAIT = 0,          // Wait for next 500 ms (2 Hz) sample tick
-    STATE_OPEN_JSON_RECORD,       // Open JSONL file and write opening '{' + timestamp
-    STATE_READ_SAVE_TEMP_HUM,     // Read I2C Temp/Humidity -> save to JSONL
-    STATE_READ_SAVE_CO_ADC,       // Read I2C 16-bit CO ADC -> save to JSONL
-    STATE_READ_SAVE_PM25,         // Read UART PM2.5 sensor -> save to JSONL
-    STATE_READ_SAVE_THERMOCOUPLES,// Read Firebox & Water TCs -> save to JSONL
-    STATE_FINALIZE_RECORD         // Close '}\n', flush SD file, stream over USB Serial
+    STATE_IDLE_WAIT = 0,            // Wait for next 500 ms (2 Hz) sample tick
+    STATE_OPEN_JSON_RECORD,         // Open JSONL file and write opening '{' + timestamp
+    STATE_READ_SAVE_TEMP_HUM,       // Read I2C Temp/Humidity -> save to JSONL
+    STATE_READ_SAVE_CO_ADC,         // Read I2C 16-bit CO ADC -> save to JSONL
+    STATE_READ_SAVE_PM25,           // Read UART PM2.5 sensor -> save to JSONL
+    STATE_READ_SAVE_THERMOCOUPLES,  // Read Firebox & Water TCs -> save to JSONL
+    STATE_FINALIZE_RECORD           // Close '}\n', flush SD file, stream over USB Serial
 };
 
 // Global state tracker and timing variables
@@ -87,16 +89,17 @@ static DaqState currentState = STATE_IDLE_WAIT;
 static unsigned long lastSampleTickMs = 0;
 
 // Hardware driver instances
-Adafruit_SHT31 sht31 = Adafruit_SHT31();
+Adafruit_AHT20 aht20 = Adafruit_AHT20();
 Adafruit_ADS1115 ads1115;
-Adafruit_MAX31855 tcFirebox(PIN_TC_FIREBOX_CS);
-Adafruit_MAX31855 tcWater(PIN_TC_WATER_CS);
+Adafruit_MAX31856 tcFirebox(PIN_TC_FIREBOX_CS);
+Adafruit_MAX31856 tcWater(PIN_TC_WATER_CS);
 
 // File handle and USB mirror buffer for the active JSONL line
 File jsonlFile;
 char usbJsonBuffer[512];
 size_t usbBufferIdx = 0;
 bool sdAvailable = false;
+
 
 // ============================================================================
 // 3. JSONL FORMATTING & FILE HELPER FUNCTIONS
@@ -147,6 +150,7 @@ void saveJsonIntField(const char* key, int32_t value, bool isValid, bool leading
     writeJsonChunk(chunk);
 }
 
+
 // ============================================================================
 // 4. SENSOR INITIALIZATION
 // ============================================================================
@@ -162,8 +166,8 @@ void initPeripherals() {
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
     Wire.setClock(I2C_CLOCK_HZ);
 
-    if (!sht31.begin(ADDR_TEMP_HUM_SENSOR)) {
-        Serial.println("{\"status\":\"warn\",\"msg\":\"SHT31 Temp/Hum not detected on I2C\"}");
+    if (!aht20.begin(ADDR_TEMP_HUM_SENSOR)) {
+        Serial.println("{\"status\":\"warn\",\"msg\":\"AHT20 Temp/Hum not detected on I2C\"}");
     }
 
     // Configure ADS1115 gain: GAIN_ONE = +/- 4.096V range (0.125 mV per bit)
@@ -201,6 +205,7 @@ void initPeripherals() {
         Serial.println("{\"status\":\"warn\",\"msg\":\"SD card mount failed; streaming USB only\"}");
     }
 }
+
 
 // ============================================================================
 // 5. ARDUINO SETUP & MAIN 2 HZ STATE MACHINE LOOP
@@ -250,8 +255,8 @@ void loop() {
         // STATE 2: Read Adafruit Temp/Humidity over I2C -> Save to JSONL
         // --------------------------------------------------------------------
         case STATE_READ_SAVE_TEMP_HUM: {
-            float ambientTempC = sht31.readTemperature();
-            float relativeHumPct = sht31.readHumidity();
+            float ambientTempC = aht20.readTemperature();
+            float relativeHumPct = aht20.readHumidity();
 
             bool tempValid = !isnan(ambientTempC);
             bool humValid  = !isnan(relativeHumPct);
@@ -310,7 +315,7 @@ void loop() {
             double fireboxTempC = tcFirebox.readCelsius();
             double waterTempC   = tcWater.readCelsius();
 
-            // MAX31855 returns NAN if thermocouple is open, shorted to GND, or VCC
+            // MAX31856 returns NAN if thermocouple is open, shorted to GND, or VCC
             bool fireboxValid = !isnan(fireboxTempC);
             bool waterValid   = !isnan(waterTempC);
 
@@ -341,6 +346,7 @@ void loop() {
     }
 }
 /*
+Feature Details:
 Valid Single-Line JSONL Output: Each 2 Hz pass produces one complete, self-contained JSON line 
 (e.g., {"ts_ms":500,"amb_temp_c":23.41,"amb_rh_pct":41.20,"co_raw":4120,"co_mv":515.000,"pm25_ugm3":14.82,"pm10_ugm3":18.10,"tc_firebox_c":412.50,"tc_water_c":68.75}), 
 writing each sensor's fields to the file in its dedicated state before advancing.
@@ -348,10 +354,4 @@ writing each sensor's fields to the file in its dedicated state before advancing
 Fault-Tolerant Null Handling: If a thermocouple disconnects or a bus read fails, 
 saveJsonFloatField / saveJsonIntField writes null rather than NaN, 
 keeping the .jsonl file and downstream Python JSON parser from breaking mid-test.
-
-Easy Library Swapping: If your Adafruit Temp/Humidity board uses 
-an SHT40/SHT41 (Adafruit_SHT4x.h), 
-a MAX6675 daughter board, 
-or a PMS5003 UART sensor, 
-only the driver calls inside states 2, 4, or 5 need to change while the state machine and JSONL writer stay intact.
 */
