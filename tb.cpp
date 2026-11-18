@@ -60,11 +60,11 @@
 
 // Set only the sensor under test to 1 and the others to 0 to exclude disabled
 // sensors from initialization and acquisition.
-#define AHT20_TEST_ENABLE       1
-#define CO_TEST_ENABLE          1
-#define PM25_TEST_ENABLE        1
-#define TC_FIREBOX_TEST_ENABLE  1
-#define TC_WATER_TEST_ENABLE    1
+#define TEMP_HUM_TEST_ENABLE    1
+#define CO_TEST_ENABLE          0
+#define PM25_TEST_ENABLE        0
+#define TC_FIREBOX_TEST_ENABLE  0
+#define TC_WATER_TEST_ENABLE    0
 
 // --- Acquisition Timing & Data Output ---
 #define USB_SERIAL_BAUD         115200    // Baud rate for Python serial readout
@@ -174,7 +174,7 @@ void initPeripherals() {
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
     Wire.setClock(I2C_CLOCK_HZ);
 
-#if AHT20_TEST_ENABLE
+#if TEMP_HUM_TEST_ENABLE
     if (!aht20.begin(ADDR_TEMP_HUM_SENSOR)) {
         Serial.println("{\"status\":\"warn\",\"msg\":\"AHT20 Temp/Hum not detected on I2C\"}");
     }
@@ -273,7 +273,7 @@ void loop() {
         // STATE 2: Read Adafruit Temp/Humidity over I2C -> Save to JSONL
         // --------------------------------------------------------------------
         case STATE_READ_SAVE_TEMP_HUM: {
-#if AHT20_TEST_ENABLE
+#if TEMP_HUM_TEST_ENABLE
             float ambientTempC = aht20.readTemperature();
             float relativeHumPct = aht20.readHumidity();
 
