@@ -15,6 +15,19 @@
  ** AI was used to create the initial template for this document
  */
 
+/*
+TO-DO:
+Testing plan:
+    Connect the sensors one at a time to the Arduino, then test them
+
+- BitBang SPI for Thermocouple board
+- Pull data from Thermocouple board
+- Collect data from  ADC
+- Connect CO sensor to ADC and read values
+- Set up UART for PM2.5, successfully pull data
+
+*/
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
