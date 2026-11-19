@@ -110,7 +110,7 @@ static DaqState currentState = STATE_IDLE_WAIT;
 static unsigned long lastSampleTickMs = 0;
 
 // Hardware driver instances
-Adafruit_AHT20 aht20 = Adafruit_AHT20();
+Adafruit_AHTX0 aht20 = Adafruit_AHTX0();
 Adafruit_ADS1115 ads1115;
 Adafruit_MAX31856 tcFirebox(PIN_TC_FIREBOX_CS);
 Adafruit_MAX31856 tcWater(PIN_TC_WATER_CS);
