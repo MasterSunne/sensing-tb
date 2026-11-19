@@ -9,8 +9,7 @@
  *  4. Dual-Channel Thermocouple Daughter Board                     -> SPI (MAX31856)
  *     - Channel 1: Firebox Temperature
  *     - Channel 2: Water Pot Temperature
- *  5. Optional MicroSD Card Storage                                -> SPI (JSONL Logging)
- *  6. Host PC / Gateway                                            -> USB Serial (JSONL Stream)
+ *  5. Host PC / Gateway                                            -> USB Serial (JSONL Stream)
  *   
  ** AI was used to create the initial template for this document
  */
@@ -31,10 +30,9 @@ Testing plan:
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
-#include <SD.h>
 
 // Sensor Libraries (Install via PlatformIO / Arduino Library Manager)
-#include <Adafruit_AHT20.h>      // Adafruit Temp/Humidity
+#include <Adafruit_AHTX0.h>      // Adafruit Temp/Humidity
 #include <Adafruit_ADS1X15.h>    // 16-bit I2C ADC (ADS1115)
 #include <Adafruit_MAX31856.h>   // Thermocouple-to-Digital Daughter Board
 #include <PMS.h>                 // PMS5003 PM2.5 UART Driver
@@ -55,21 +53,19 @@ Testing plan:
 #define CO_ADC_CHANNEL          0         // ADS1115 analog input channel (AIN0)
 
 // --- UART Bus (PM2.5 Sensor) ---
-#define PIN_PM25_UART_RX        0        // MCU RX <- PM2.5 TX
-#define PIN_PM25_UART_TX        1        // MCU TX -> PM2.5 RX
-#define PM25_UART_BAUD          115200    // 115200 for Sensirion SPS30 (use 9600 for PMS5003)
-#define PM25_SERIAL_PORT        Serial1   // Hardware UART instance
+#define PIN_PM25_UART_RX        0       // MCU RX <- PM2.5 TX
+#define PIN_PM25_UART_TX        1       // MCU TX -> PM2.5 RX
+#define PM25_UART_BAUD          9600    // 9600 for the PMS5003
+#define PM25_SERIAL_PORT        Serial1 // Hardware UART instance
 
-// --- SPI Bus (Thermocouple Daughter Board + SD Card) ---
-#define PIN_SPI_SCK             48
-#define PIN_SPI_MISO            46
-#define PIN_SPI_MOSI            47
-#define PIN_SPI_CS              49         // Default CS pin for SPI devices (override per device below)
+// --- SPI Bus (Thermocouple Daughter Board) ---
+#define SOFT_SPI_SCK             48
+#define SOFT_SPI_MISO            46
+#define SOFT_SPI_MOSI            47
 
 // Chip Select (CS) Pins for SPI Peripherals
 #define PIN_TC_FIREBOX_CS       5         // Thermocouple 1: Firebox temp CS
 #define PIN_TC_WATER_CS         4         // Thermocouple 2: Water temp CS
-#define PIN_SD_CARD_CS          15        // MicroSD card CS for JSONL storage
 
 // Set only the sensor under test to 1 and the others to 0 to exclude disabled
 // sensors from initialization and acquisition.
@@ -92,17 +88,17 @@ Testing plan:
 
 /**
  * @brief Acquisition state machine states.
- * Each sensor state reads one peripheral and immediately appends its JSON
- * fields to the active JSONL file before transitioning to the next state.
+ * Each sensor state reads one peripheral and appends its JSON fields to the
+ * active JSONL record before transitioning to the next state.
  */
 enum DaqState {
     STATE_IDLE_WAIT = 0,            // Wait for next 500 ms (2 Hz) sample tick
-    STATE_OPEN_JSON_RECORD,         // Open JSONL file and write opening '{' + timestamp
+    STATE_OPEN_JSON_RECORD,         // Write opening '{' + timestamp
     STATE_READ_SAVE_TEMP_HUM,       // Read I2C Temp/Humidity -> save to JSONL
     STATE_READ_SAVE_CO_ADC,         // Read I2C 16-bit CO ADC -> save to JSONL
     STATE_READ_SAVE_PM25,           // Read UART PM2.5 sensor -> save to JSONL
     STATE_READ_SAVE_THERMOCOUPLES,  // Read Firebox & Water TCs -> save to JSONL
-    STATE_FINALIZE_RECORD           // Close '}\n', flush SD file, stream over USB Serial
+    STATE_FINALIZE_RECORD           // Close '}\n' and stream over USB Serial
 };
 
 // Global state tracker and timing variables
@@ -115,24 +111,19 @@ Adafruit_ADS1115 ads1115;
 Adafruit_MAX31856 tcFirebox(PIN_TC_FIREBOX_CS);
 Adafruit_MAX31856 tcWater(PIN_TC_WATER_CS);
 
-// File handle and USB mirror buffer for the active JSONL line
-File jsonlFile;
+// USB buffer for the active JSONL line
 char usbJsonBuffer[512];
 size_t usbBufferIdx = 0;
-bool sdAvailable = false;
 
 
 // ============================================================================
-// 3. JSONL FORMATTING & FILE HELPER FUNCTIONS
+// 3. JSONL FORMATTING & OUTPUT HELPERS
 // ============================================================================
 
 /**
- * @brief Appends raw text to both the SD card JSONL file and the USB mirror buffer.
+ * @brief Appends raw text to the USB JSONL buffer.
  */
 void writeJsonChunk(const char* text) {
-    if (sdAvailable && jsonlFile) {
-        jsonlFile.print(text);
-    }
     size_t len = strlen(text);
     if (usbBufferIdx + len < sizeof(usbJsonBuffer) - 1) {
         memcpy(&usbJsonBuffer[usbBufferIdx], text, len);
@@ -177,6 +168,9 @@ void saveJsonIntField(const char* key, int32_t value, bool isValid, bool leading
 // ============================================================================
 
 void initPeripherals() {
+    // Configure pin 53 to stop unexpected interrupts.
+    pinMode(53, OUTPUT);
+
     // 1. Initialize USB Serial for host Python readout
     Serial.begin(USB_SERIAL_BAUD);
     while (!Serial && millis() < 2000) {
@@ -184,11 +178,12 @@ void initPeripherals() {
     }
 
     // 2. Initialize shared I2C bus (Temp/Humidity + 16-bit CO ADC)
-    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+    // Using no arguments keeps initialization compatible with all TwoWire implementations.
+    Wire.begin();
     Wire.setClock(I2C_CLOCK_HZ);
 
 #if TEMP_HUM_TEST_ENABLE
-    if (!aht20.begin(ADDR_TEMP_HUM_SENSOR)) {
+    if (!aht20.begin(&Wire)) {
         Serial.println("{\"status\":\"warn\",\"msg\":\"AHT20 Temp/Hum not detected on I2C\"}");
     }
 #endif
@@ -212,16 +207,16 @@ void initPeripherals() {
     }
 #endif
 
-    // 4. Initialize SPI bus for Thermocouple Daughter Board & SD Card
-    SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI);
+    // 4. Initialize SPI bus for the Thermocouple Daughter Board
+#if TC_FIREBOX_TEST_ENABLE || TC_WATER_TEST_ENABLE
+    SPI.begin();
 
     // Ensure all SPI CS lines start HIGH (deselected) before initializing devices
     pinMode(PIN_TC_FIREBOX_CS, OUTPUT);
     digitalWrite(PIN_TC_FIREBOX_CS, HIGH);
     pinMode(PIN_TC_WATER_CS, OUTPUT);
     digitalWrite(PIN_TC_WATER_CS, HIGH);
-    pinMode(PIN_SD_CARD_CS, OUTPUT);
-    digitalWrite(PIN_SD_CARD_CS, HIGH);
+#endif
 
 #if TC_FIREBOX_TEST_ENABLE
     tcFirebox.begin();
@@ -229,12 +224,6 @@ void initPeripherals() {
 #if TC_WATER_TEST_ENABLE
     tcWater.begin();
 #endif
-
-    if (SD.begin(PIN_SD_CARD_CS)) {
-        sdAvailable = true;
-    } else {
-        Serial.println("{\"status\":\"warn\",\"msg\":\"SD card mount failed; streaming USB only\"}");
-    }
 }
 
 
@@ -264,15 +253,11 @@ void loop() {
         }
 
         // --------------------------------------------------------------------
-        // STATE 1: Begin a new JSONL line with the system timestamp
+        // STATE 1: Begin a new JSONL record with the system timestamp
         // --------------------------------------------------------------------
         case STATE_OPEN_JSON_RECORD: {
             usbBufferIdx = 0;
             usbJsonBuffer[0] = '\0';
-
-            if (sdAvailable) {
-                jsonlFile = SD.open(JSONL_FILE_PATH, FILE_APPEND);
-            }
 
             char header[48];
             snprintf(header, sizeof(header), "{\"ts_ms\":%lu", lastSampleTickMs);
@@ -287,11 +272,14 @@ void loop() {
         // --------------------------------------------------------------------
         case STATE_READ_SAVE_TEMP_HUM: {
 #if TEMP_HUM_TEST_ENABLE
-            float ambientTempC = aht20.readTemperature();
-            float relativeHumPct = aht20.readHumidity();
+            sensors_event_t humidityEvent;
+            sensors_event_t temperatureEvent;
+            bool readingsValid = aht20.getEvent(&humidityEvent, &temperatureEvent);
+            float ambientTempC = temperatureEvent.temperature;
+            float relativeHumPct = humidityEvent.relative_humidity;
 
-            bool tempValid = !isnan(ambientTempC);
-            bool humValid  = !isnan(relativeHumPct);
+            bool tempValid = readingsValid && !isnan(ambientTempC);
+            bool humValid = readingsValid && !isnan(relativeHumPct);
 
             saveJsonFloatField("amb_temp_c", ambientTempC, 2, tempValid);
             saveJsonFloatField("amb_rh_pct", relativeHumPct, 2, humValid);
@@ -367,15 +355,10 @@ void loop() {
         }
 
         // --------------------------------------------------------------------
-        // STATE 6: Close JSON object, flush SD file, and send over USB Serial
+        // STATE 6: Close JSON object and send over USB Serial
         // --------------------------------------------------------------------
         case STATE_FINALIZE_RECORD: {
             writeJsonChunk("}\n");
-
-            if (sdAvailable && jsonlFile) {
-                jsonlFile.flush();
-                jsonlFile.close();
-            }
 
             // Output the completed JSONL line over Serial USB for the Python script
             Serial.print(usbJsonBuffer);
