@@ -82,6 +82,7 @@ class CookstoveDataBuffer:
         self.amb_rh_pct = deque(maxlen=max_samples)
 
         self.t0_ms: int | None = None
+        self.last_elapsed_s = 0.0
         self.total_packets = 0
 
     def append_record(self, record: dict) -> None:
@@ -91,11 +92,30 @@ class CookstoveDataBuffer:
             return
 
         with self.lock:
+            try:
+                ts_ms = int(ts_ms)
+            except (TypeError, ValueError):
+                return
+
             if self.t0_ms is None:
-                self.t0_ms = int(ts_ms)
+                self.t0_ms = ts_ms
+
+            timestamp_delta = ts_ms - self.t0_ms
+
+            # millis() starts over after a firmware reset or long uptime rollover.
+            # Rebase only for a large backward jump; small decreases are stale or
+            # out-of-order packets and should not reset the elapsed-time origin.
+            if timestamp_delta < -1000:
+                self.t0_ms = ts_ms
+                timestamp_delta = 0
+                self.last_elapsed_s = 0.0
 
             # Elapsed test time in seconds relative to first received packet
-            elapsed_s = (int(ts_ms) - self.t0_ms) / 1000.0
+            elapsed_s = max(
+                self.last_elapsed_s,
+                max(0.0, timestamp_delta / 1000.0),
+            )
+            self.last_elapsed_s = elapsed_s
             self.t_sec.append(elapsed_s)
 
             self.tc_firebox_c.append(to_nan_float(record.get("tc_firebox_c")))
@@ -384,8 +404,8 @@ def main() -> None:
     parser.add_argument(
         "--port",
         type=str,
-        default=None,
-        help="Serial port (e.g., COM3, /dev/ttyUSB0). Auto-detected if omitted.",
+        default="COM3",
+        help="Serial port (default: COM3).",
     )
     parser.add_argument(
         "--baud",
