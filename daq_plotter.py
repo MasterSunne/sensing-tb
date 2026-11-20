@@ -77,13 +77,13 @@ class CookstoveDataBuffer:
         self.co_mv = deque(maxlen=max_samples)
         self.co_raw = deque(maxlen=max_samples)
         self.pm25_ugm3 = deque(maxlen=max_samples)
-        self.pm10_ugm3 = deque(maxlen=max_samples)
         self.amb_temp_c = deque(maxlen=max_samples)
         self.amb_rh_pct = deque(maxlen=max_samples)
 
         self.t0_ms: int | None = None
         self.last_elapsed_s = 0.0
         self.total_packets = 0
+        self.present_fields: set[str] = set()
 
     def append_record(self, record: dict) -> None:
         """Parses one JSON dictionary emitted by tb.cpp and stores each channel."""
@@ -96,6 +96,11 @@ class CookstoveDataBuffer:
                 ts_ms = int(ts_ms)
             except (TypeError, ValueError):
                 return
+
+            self.present_fields.update(
+                key for key in record
+                if key not in ("ts_ms", "status", "msg")
+            )
 
             if self.t0_ms is None:
                 self.t0_ms = ts_ms
@@ -123,7 +128,6 @@ class CookstoveDataBuffer:
             self.co_mv.append(to_nan_float(record.get("co_mv")))
             self.co_raw.append(to_nan_float(record.get("co_raw")))
             self.pm25_ugm3.append(to_nan_float(record.get("pm25_ugm3")))
-            self.pm10_ugm3.append(to_nan_float(record.get("pm10_ugm3")))
             self.amb_temp_c.append(to_nan_float(record.get("amb_temp_c")))
             self.amb_rh_pct.append(to_nan_float(record.get("amb_rh_pct")))
 
@@ -139,9 +143,9 @@ class CookstoveDataBuffer:
                 "co_mv": np.array(self.co_mv, dtype=float),
                 "co_raw": np.array(self.co_raw, dtype=float),
                 "pm25_ugm3": np.array(self.pm25_ugm3, dtype=float),
-                "pm10_ugm3": np.array(self.pm10_ugm3, dtype=float),
                 "amb_temp_c": np.array(self.amb_temp_c, dtype=float),
                 "amb_rh_pct": np.array(self.amb_rh_pct, dtype=float),
+                "present_fields": set(self.present_fields),
                 "total_packets": self.total_packets,
             }
 
@@ -214,7 +218,6 @@ def demo_stream_worker(
             water = min(98.5, 21.0 + 0.42 * t + random.uniform(-0.2, 0.2))
             co_mv = 410.0 + 180.0 * math.exp(-((t - 35.0) ** 2) / 900.0) + random.uniform(-3.0, 3.0)
             pm25 = max(2.0, 18.0 + 95.0 * math.exp(-((t - 30.0) ** 2) / 700.0) + random.uniform(-2.5, 2.5))
-            pm10 = pm25 * 1.28 + random.uniform(0.5, 3.0)
 
             record = {
                 "ts_ms": ts_ms,
@@ -223,7 +226,6 @@ def demo_stream_worker(
                 "co_raw": int(co_mv / 0.125),
                 "co_mv": round(co_mv, 3),
                 "pm25_ugm3": round(pm25, 2),
-                "pm10_ugm3": round(pm10, 2),
                 "tc_firebox_c": round(firebox, 2),
                 "tc_water_c": round(water, 2),
             }
@@ -247,7 +249,11 @@ def format_latest(arr: np.ndarray, unit: str, decimals: int = 1) -> str:
     return f"{arr[-1]:.{decimals}f} {unit}"
 
 
-def run_live_dashboard(buffer: CookstoveDataBuffer, stop_event: threading.Event) -> None:
+def run_live_dashboard(
+    buffer: CookstoveDataBuffer,
+    stop_event: threading.Event,
+    plot_path: Path,
+) -> None:
     """Builds and animates a 2x2 real-time sensor dashboard at 2 Hz."""
     plt.style.use("seaborn-v0_8-darkgrid")
     fig, axes = plt.subplots(2, 2, figsize=(13, 8), sharex=True)
@@ -278,9 +284,8 @@ def run_live_dashboard(buffer: CookstoveDataBuffer, stop_event: threading.Event)
     ax_co.set_ylabel("CO Voltage (mV)", fontweight="bold")
     ax_co.legend(loc="upper left", frameon=True)
 
-    # --- Panel 3: Particulate Matter (PM2.5 & PM10) ---
+    # --- Panel 3: Particulate Matter (PM2.5) ---
     (line_pm25,) = ax_pm.plot([], [], color="#e7298a", lw=1.8, label="PM2.5 (µg/m³)")
-    (line_pm10,) = ax_pm.plot([], [], color="#66a61e", lw=1.4, linestyle="--", label="PM10 (µg/m³)")
     ax_pm.set_ylabel("Concentration (µg/m³)", fontweight="bold")
     ax_pm.set_xlabel("Elapsed Test Time (s)", fontweight="bold")
     ax_pm.legend(loc="upper left", frameon=True)
@@ -314,14 +319,43 @@ def run_live_dashboard(buffer: CookstoveDataBuffer, stop_event: threading.Event)
         if t.size == 0:
             return []
 
+        present = data["present_fields"]
+
+        def sensor_status(field: str, arr: np.ndarray, unit: str, decimals: int = 1) -> str:
+            if field not in present:
+                return "Disabled"
+            if arr.size == 0 or not np.any(~np.isnan(arr)):
+                return "No valid data"
+            return format_latest(arr, unit, decimals)
+
         # Update line data
         line_firebox.set_data(t, data["tc_firebox_c"])
         line_water.set_data(t, data["tc_water_c"])
         line_co.set_data(t, data["co_mv"])
         line_pm25.set_data(t, data["pm25_ugm3"])
-        line_pm10.set_data(t, data["pm10_ugm3"])
         line_amb_t.set_data(t, data["amb_temp_c"])
         line_amb_rh.set_data(t, data["amb_rh_pct"])
+
+        firebox_present = "tc_firebox_c" in present
+        water_present = "tc_water_c" in present
+        co_present = "co_mv" in present or "co_raw" in present
+        pm25_present = "pm25_ugm3" in present
+        amb_temp_present = "amb_temp_c" in present
+        amb_rh_present = "amb_rh_pct" in present
+
+        line_firebox.set_visible(firebox_present)
+        line_water.set_visible(water_present)
+        line_co.set_visible(co_present)
+        line_pm25.set_visible(pm25_present)
+        line_amb_t.set_visible(amb_temp_present)
+        line_amb_rh.set_visible(amb_rh_present)
+
+        ax_tc.set_visible(firebox_present)
+        ax_tc_water.set_visible(water_present)
+        ax_co.set_visible(co_present)
+        ax_pm.set_visible(pm25_present)
+        ax_amb.set_visible(amb_temp_present)
+        ax_amb_rh.set_visible(amb_rh_present)
 
         # Update X-axis range across all shared subplots
         xmin = float(t[0])
@@ -332,34 +366,78 @@ def run_live_dashboard(buffer: CookstoveDataBuffer, stop_event: threading.Event)
         rescale_axis(ax_tc, [data["tc_firebox_c"]])
         rescale_axis(ax_tc_water, [data["tc_water_c"]])
         rescale_axis(ax_co, [data["co_mv"]])
-        rescale_axis(ax_pm, [data["pm25_ugm3"], data["pm10_ugm3"]])
+        rescale_axis(ax_pm, [data["pm25_ugm3"]])
         rescale_axis(ax_amb, [data["amb_temp_c"]])
         rescale_axis(ax_amb_rh, [data["amb_rh_pct"]])
 
         # Live numeric HUD in each subplot title
         ax_tc.set_title(
-            f"Thermocouples | Firebox: {format_latest(data['tc_firebox_c'], '°C')}  "
-            f"Water: {format_latest(data['tc_water_c'], '°C')}",
+            f"Thermocouples | Firebox: {sensor_status('tc_firebox_c', data['tc_firebox_c'], '°C')}  "
+            f"Water: {sensor_status('tc_water_c', data['tc_water_c'], '°C')}",
             fontsize=10,
             fontweight="bold",
+        )
+        if firebox_present:
+            ax_tc_water.set_title(
+                f"Firebox: {sensor_status('tc_firebox_c', data['tc_firebox_c'], '°C')}  "
+                f"Water: {sensor_status('tc_water_c', data['tc_water_c'], '°C')}",
+                fontsize=10,
+                fontweight="bold",
+            )
+        else:
+            ax_tc.set_title(
+                f"Thermocouples | Firebox: Disabled  "
+                f"Water: {sensor_status('tc_water_c', data['tc_water_c'], '°C')}",
+                fontsize=10,
+                fontweight="bold",
+            )
+
+        ax_tc.legend(
+            [line for line, enabled in ((line_firebox, firebox_present), (line_water, water_present)) if enabled],
+            [label for label, enabled in (
+                ("Firebox (°C)", firebox_present),
+                ("Water (°C)", water_present),
+            ) if enabled],
+            loc="upper left",
+            frameon=True,
         )
         ax_co.set_title(
-            f"CO Sensor | Signal: {format_latest(data['co_mv'], 'mV')} "
-            f"(Raw: {format_latest(data['co_raw'], 'cts', 0)})",
+            f"CO Sensor | Signal: {sensor_status('co_mv', data['co_mv'], 'mV')} "
+            f"(Raw: {sensor_status('co_raw', data['co_raw'], 'cts', 0)})",
             fontsize=10,
             fontweight="bold",
+        )
+        ax_co.legend(
+            [line_co] if co_present else [],
+            ["CO Signal (mV)"] if co_present else [],
+            loc="upper left",
+            frameon=True,
         )
         ax_pm.set_title(
-            f"Particulate Matter | PM2.5: {format_latest(data['pm25_ugm3'], 'µg/m³')}  "
-            f"PM10: {format_latest(data['pm10_ugm3'], 'µg/m³')}",
+            f"Particulate Matter | PM2.5: {sensor_status('pm25_ugm3', data['pm25_ugm3'], 'µg/m³')}",
             fontsize=10,
             fontweight="bold",
         )
+        ax_pm.legend(
+            [line_pm25] if pm25_present else [],
+            ["PM2.5 (µg/m³)"] if pm25_present else [],
+            loc="upper left",
+            frameon=True,
+        )
         ax_amb.set_title(
-            f"Ambient | Temp: {format_latest(data['amb_temp_c'], '°C')}  "
-            f"RH: {format_latest(data['amb_rh_pct'], '%')}",
+            f"Ambient | Temp: {sensor_status('amb_temp_c', data['amb_temp_c'], '°C')}  "
+            f"RH: {sensor_status('amb_rh_pct', data['amb_rh_pct'], '%')}",
             fontsize=10,
             fontweight="bold",
+        )
+        ax_amb.legend(
+            [line for line, enabled in ((line_amb_t, amb_temp_present), (line_amb_rh, amb_rh_present)) if enabled],
+            [label for label, enabled in (
+                ("Ambient Temp (°C)", amb_temp_present),
+                ("Rel. Humidity (%)", amb_rh_present),
+            ) if enabled],
+            loc="upper left",
+            frameon=True,
         )
 
         fig.suptitle(
@@ -372,7 +450,6 @@ def run_live_dashboard(buffer: CookstoveDataBuffer, stop_event: threading.Event)
             line_water,
             line_co,
             line_pm25,
-            line_pm10,
             line_amb_t,
             line_amb_rh,
         ]
@@ -390,6 +467,9 @@ def run_live_dashboard(buffer: CookstoveDataBuffer, stop_event: threading.Event)
     try:
         plt.show()
     finally:
+        plot_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+        print(f"[PLOT] Saved timestamped plot to: {plot_path}")
         stop_event.set()
 
 
@@ -423,7 +503,7 @@ def main() -> None:
         "--out",
         type=str,
         default=None,
-        help="Host backup .jsonl path (default: cookstove_test_YYYYMMDD_HHMMSS.jsonl).",
+        help="Host backup .jsonl path (default: results/cookstove_test_MM_DD_YYYY_HHMMSS.jsonl).",
     )
     parser.add_argument(
         "--demo",
@@ -437,7 +517,16 @@ def main() -> None:
     stop_event = threading.Event()
 
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = Path(args.out) if args.out else Path(f"cookstove_test_{timestamp_str}.jsonl")
+    if args.out:
+        log_path = Path(args.out)
+    else:
+        results_dir = Path(__file__).resolve().parent / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        log_path = results_dir / f"cookstove_test_{timestamp_str}.jsonl"
+
+    plots_dir = Path(__file__).resolve().parent / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    plot_path = plots_dir / f"daq_plot_{timestamp_str}.png"
 
     if args.demo:
         worker = threading.Thread(
@@ -455,7 +544,7 @@ def main() -> None:
 
     worker.start()
     try:
-        run_live_dashboard(buffer, stop_event)
+        run_live_dashboard(buffer, stop_event, plot_path)
     except KeyboardInterrupt:
         print("\n[INFO] Interrupted by user. Closing serial stream and saving log...")
     finally:
