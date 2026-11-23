@@ -1,3 +1,5 @@
 .venv/
 ./mypy_cache
 ./vscode
+plots/
+results/

@@ -60,8 +60,8 @@ Testing plan:
 
 // --- SPI Bus (Thermocouple Daughter Board) ---
 #define SOFT_SPI_SCK             48
-#define SOFT_SPI_MISO            46
-#define SOFT_SPI_MOSI            47
+#define SOFT_SPI_MISO            46     // SDO
+#define SOFT_SPI_MOSI            47     // SDI
 
 // Chip Select (CS) Pins for SPI Peripherals
 #define PIN_TC_FIREBOX_CS       5         // Thermocouple 1: Firebox temp CS
@@ -72,8 +72,8 @@ Testing plan:
 #define TEMP_HUM_TEST_ENABLE    1
 #define CO_TEST_ENABLE          0
 #define PM25_TEST_ENABLE        0
-#define TC_FIREBOX_TEST_ENABLE  0
-#define TC_WATER_TEST_ENABLE    0
+#define TC_FIREBOX_TEST_ENABLE  1
+#define TC_WATER_TEST_ENABLE    1
 
 // --- Acquisition Timing & Data Output ---
 #define USB_SERIAL_BAUD         115200    // Baud rate for Python serial readout
