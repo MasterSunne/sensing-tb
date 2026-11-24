@@ -35,7 +35,6 @@ Testing plan:
 #include <Adafruit_AHTX0.h>      // Adafruit Temp/Humidity
 #include <Adafruit_ADS1X15.h>    // 16-bit I2C ADC (ADS1115)
 #include <Adafruit_MAX31856.h>   // Thermocouple-to-Digital Daughter Board
-#include <PMS.h>                 // PMS5003 PM2.5 UART Driver
 
 
 // ============================================================================
@@ -53,9 +52,7 @@ Testing plan:
 #define CO_ADC_CHANNEL          0         // ADS1115 analog input channel (AIN0)
 
 // --- UART Bus (PM2.5 Sensor) ---
-#define PIN_PM25_UART_RX        0       // MCU RX <- PM2.5 TX
-#define PIN_PM25_UART_TX        1       // MCU TX -> PM2.5 RX
-#define PM25_UART_BAUD          9600    // 9600 for the PMS5003
+#define PM25_UART_BAUD          9600    // 9600 for the PM2008M-M
 #define PM25_SERIAL_PORT        Serial1 // Hardware UART instance
 
 // --- SPI Bus (Thermocouple Daughter Board) ---
@@ -71,9 +68,9 @@ Testing plan:
 // sensors from initialization and acquisition.
 #define TEMP_HUM_TEST_ENABLE    1
 #define CO_TEST_ENABLE          0
-#define PM25_TEST_ENABLE        0
-#define TC_FIREBOX_TEST_ENABLE  1
-#define TC_WATER_TEST_ENABLE    1
+#define PM25_TEST_ENABLE        1
+#define TC_FIREBOX_TEST_ENABLE  0
+#define TC_WATER_TEST_ENABLE    0
 
 // --- Acquisition Timing & Data Output ---
 #define USB_SERIAL_BAUD         115200    // Baud rate for Python serial readout
@@ -114,6 +111,77 @@ Adafruit_MAX31856 tcWater(PIN_TC_WATER_CS, SOFT_SPI_MOSI, SOFT_SPI_MISO, SOFT_SP
 // USB buffer for the active JSONL line
 char usbJsonBuffer[512];
 size_t usbBufferIdx = 0;
+
+struct Pm2008Reading {
+    uint32_t pm1;
+    uint32_t pm25;
+    uint32_t pm10;
+};
+
+uint32_t pm2008Be32(const uint8_t* data) {
+    return ((uint32_t)data[0] << 24) |
+           ((uint32_t)data[1] << 16) |
+           ((uint32_t)data[2] << 8) |
+           (uint32_t)data[3];
+}
+
+bool pm2008Read(Pm2008Reading& reading) {
+    static uint8_t frame[56];
+    static size_t frameIdx = 0;
+
+    const uint32_t start = millis();
+    while (millis() - start < 250) {
+        if (!PM25_SERIAL_PORT.available()) {
+            delay(1);
+            continue;
+        }
+
+        const uint8_t byte = PM25_SERIAL_PORT.read();
+
+        if (frameIdx == 0) {
+            if (byte == 0x16) {
+                frame[frameIdx++] = byte;
+            }
+            continue;
+        }
+
+        frame[frameIdx++] = byte;
+
+        if (frameIdx == 2 && frame[1] != 0x35) {
+            frameIdx = 0;
+            continue;
+        }
+        if (frameIdx == 3 && frame[2] != 0x0B) {
+            frameIdx = 0;
+            continue;
+        }
+
+        if (frameIdx < sizeof(frame)) {
+            continue;
+        }
+
+        uint16_t checksumSum = 0;
+        for (size_t i = 0; i < sizeof(frame) - 1; i++) {
+            checksumSum = (checksumSum + frame[i]) & 0xFF;
+        }
+        const bool checksumValid = ((uint16_t)frame[sizeof(frame) - 1] +
+                                    checksumSum) == 0x100;
+
+        frameIdx = 0;
+        if (!checksumValid) {
+            continue;
+        }
+
+        reading.pm1 = pm2008Be32(&frame[3]);
+        reading.pm25 = pm2008Be32(&frame[7]);
+        reading.pm10 = pm2008Be32(&frame[11]);
+        return reading.pm1 <= 5000 && reading.pm25 <= 5000 &&
+               reading.pm10 <= 5000;
+    }
+
+    frameIdx = 0;
+    return false;
+}
 
 
 // ============================================================================
@@ -196,15 +264,12 @@ void initPeripherals() {
     }
 #endif
 
-    // 3. Initialize UART for PM2.5 sensor (Sensirion SPS30)
+    // 3. Initialize UART for PM2.5 sensor (PM2008M-M)
 #if PM25_TEST_ENABLE
-    PM25_SERIAL_PORT.begin(PM25_UART_BAUD, SERIAL_8N1, PIN_PM25_UART_RX, PIN_PM25_UART_TX);
-    sensirion_uart_open();
-    if (sps30_probe() == 0) {
-        sps30_start_measurement();
-    } else {
-        Serial.println("{\"status\":\"warn\",\"msg\":\"PM2.5 sensor not responding on UART\"}");
-    }
+        PM25_SERIAL_PORT.begin(PM25_UART_BAUD, SERIAL_8N1);
+        while (PM25_SERIAL_PORT.available()) {
+            PM25_SERIAL_PORT.read();
+        }
 #endif
 
     // 4. Initialize SPI bus for the Thermocouple Daughter Board
@@ -324,19 +389,14 @@ void loop() {
         // --------------------------------------------------------------------
         case STATE_READ_SAVE_PM25: {
 #if PM25_TEST_ENABLE
-            struct sps30_measurement pmData;
-            uint16_t dataReady = 0;
-            bool pmValid = false;
+            const uint8_t readCommand[] = {0x11, 0x02, 0x0B, 0xDB};
+            PM25_SERIAL_PORT.write(readCommand, sizeof(readCommand));
 
-            // Poll UART sensor for new particulate concentration frame
-            if (sps30_read_data_ready(&dataReady) == 0 && dataReady) {
-                if (sps30_read_measurement(&pmData) == 0) {
-                    pmValid = true;
-                }
-            }
+            Pm2008Reading pmData = {0, 0, 0};
+            bool pmValid = pm2008Read(pmData);
 
-            saveJsonFloatField("pm25_ugm3", pmData.mc_2p5, 2, pmValid);
-            saveJsonFloatField("pm10_ugm3", pmData.mc_10p0, 2, pmValid);
+            saveJsonFloatField("pm25_ugm3", (float)pmData.pm25, 1, pmValid);
+            saveJsonFloatField("pm10_ugm3", (float)pmData.pm10, 1, pmValid);
 #endif
 
             currentState = STATE_READ_SAVE_THERMOCOUPLES;
