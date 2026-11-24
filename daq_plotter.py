@@ -371,15 +371,9 @@ def run_live_dashboard(
         rescale_axis(ax_amb_rh, [data["amb_rh_pct"]])
 
         # Live numeric HUD in each subplot title
-        ax_tc.set_title(
-            f"Thermocouples | Firebox: {sensor_status('tc_firebox_c', data['tc_firebox_c'], '°C')}  "
-            f"Water: {sensor_status('tc_water_c', data['tc_water_c'], '°C')}",
-            fontsize=10,
-            fontweight="bold",
-        )
         if firebox_present:
             ax_tc_water.set_title(
-                f"Firebox: {sensor_status('tc_firebox_c', data['tc_firebox_c'], '°C')}  "
+                f"Thermocouples | Firebox: {sensor_status('tc_firebox_c', data['tc_firebox_c'], '°C')}  -  "
                 f"Water: {sensor_status('tc_water_c', data['tc_water_c'], '°C')}",
                 fontsize=10,
                 fontweight="bold",
@@ -392,52 +386,22 @@ def run_live_dashboard(
                 fontweight="bold",
             )
 
-        ax_tc.legend(
-            [line for line, enabled in ((line_firebox, firebox_present), (line_water, water_present)) if enabled],
-            [label for label, enabled in (
-                ("Firebox (°C)", firebox_present),
-                ("Water (°C)", water_present),
-            ) if enabled],
-            loc="upper left",
-            frameon=True,
-        )
         ax_co.set_title(
             f"CO Sensor | Signal: {sensor_status('co_mv', data['co_mv'], 'mV')} "
             f"(Raw: {sensor_status('co_raw', data['co_raw'], 'cts', 0)})",
             fontsize=10,
             fontweight="bold",
         )
-        ax_co.legend(
-            [line_co] if co_present else [],
-            ["CO Signal (mV)"] if co_present else [],
-            loc="upper left",
-            frameon=True,
-        )
         ax_pm.set_title(
             f"Particulate Matter | PM2.5: {sensor_status('pm25_ugm3', data['pm25_ugm3'], 'µg/m³')}",
             fontsize=10,
             fontweight="bold",
         )
-        ax_pm.legend(
-            [line_pm25] if pm25_present else [],
-            ["PM2.5 (µg/m³)"] if pm25_present else [],
-            loc="upper left",
-            frameon=True,
-        )
         ax_amb.set_title(
-            f"Ambient | Temp: {sensor_status('amb_temp_c', data['amb_temp_c'], '°C')}  "
+            f"Ambient | Temp: {sensor_status('amb_temp_c', data['amb_temp_c'], '°C')}  -  "
             f"RH: {sensor_status('amb_rh_pct', data['amb_rh_pct'], '%')}",
             fontsize=10,
             fontweight="bold",
-        )
-        ax_amb.legend(
-            [line for line, enabled in ((line_amb_t, amb_temp_present), (line_amb_rh, amb_rh_present)) if enabled],
-            [label for label, enabled in (
-                ("Ambient Temp (°C)", amb_temp_present),
-                ("Rel. Humidity (%)", amb_rh_present),
-            ) if enabled],
-            loc="upper left",
-            frameon=True,
         )
 
         fig.suptitle(

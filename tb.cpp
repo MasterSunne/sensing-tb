@@ -108,8 +108,8 @@ static unsigned long lastSampleTickMs = 0;
 // Hardware driver instances
 Adafruit_AHTX0 aht20 = Adafruit_AHTX0();
 Adafruit_ADS1115 ads1115;
-Adafruit_MAX31856 tcFirebox(PIN_TC_FIREBOX_CS);
-Adafruit_MAX31856 tcWater(PIN_TC_WATER_CS);
+Adafruit_MAX31856 tcFirebox(PIN_TC_FIREBOX_CS, SOFT_SPI_MOSI, SOFT_SPI_MISO, SOFT_SPI_SCK);
+Adafruit_MAX31856 tcWater(PIN_TC_WATER_CS, SOFT_SPI_MOSI, SOFT_SPI_MISO, SOFT_SPI_SCK);
 
 // USB buffer for the active JSONL line
 char usbJsonBuffer[512];
@@ -219,10 +219,14 @@ void initPeripherals() {
 #endif
 
 #if TC_FIREBOX_TEST_ENABLE
-    tcFirebox.begin();
+    if (!tcFirebox.begin()) {
+        Serial.println("{\"status\":\"warn\",\"msg\":\"Firebox MAX31856 not detected on SPI\"}");
+    }
 #endif
 #if TC_WATER_TEST_ENABLE
-    tcWater.begin();
+    if (!tcWater.begin()) {
+        Serial.println("{\"status\":\"warn\",\"msg\":\"Water MAX31856 not detected on SPI\"}");
+    }
 #endif
 }
 
@@ -338,15 +342,16 @@ void loop() {
         // --------------------------------------------------------------------
         case STATE_READ_SAVE_THERMOCOUPLES: {
 #if TC_FIREBOX_TEST_ENABLE
-            double fireboxTempC = tcFirebox.readCelsius();
-            // MAX31856 returns NAN if thermocouple is open, shorted to GND, or VCC
-            bool fireboxValid = !isnan(fireboxTempC);
+            double fireboxTempC = tcFirebox.readThermocoupleTemperature();
+            bool fireboxValid = tcFirebox.readFault() == 0 &&
+                                !isnan(fireboxTempC) && !isinf(fireboxTempC);
             saveJsonFloatField("tc_firebox_c", (float)fireboxTempC, 2, fireboxValid);
 #endif
 
 #if TC_WATER_TEST_ENABLE
-            double waterTempC = tcWater.readCelsius();
-            bool waterValid = !isnan(waterTempC);
+            double waterTempC = tcWater.readThermocoupleTemperature();
+            bool waterValid = tcWater.readFault() == 0 &&
+                              !isnan(waterTempC) && !isinf(waterTempC);
             saveJsonFloatField("tc_water_c",   (float)waterTempC,   2, waterValid);
 #endif
 
