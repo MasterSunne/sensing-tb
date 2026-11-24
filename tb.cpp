@@ -48,7 +48,7 @@ Testing plan:
 #define I2C_CLOCK_HZ            100000UL  // 100 kHz standard mode for bus reliability
 
 // I2C Device Addresses
-#define ADDR_TEMP_HUM_SENSOR    0x38      // Default Adafruit AHT20 address
+#define ADDR_TEMP_HUM_SENSOR    0x44      // Default Adafruit AHT20 address
 #define ADDR_CO_ADC_16BIT       0x48      // Default ADS1115 address (ADDR pin to GND)
 #define CO_ADC_CHANNEL          0         // ADS1115 analog input channel (AIN0)
 
@@ -221,11 +221,17 @@ void initPeripherals() {
 #if TC_FIREBOX_TEST_ENABLE
     if (!tcFirebox.begin()) {
         Serial.println("{\"status\":\"warn\",\"msg\":\"Firebox MAX31856 not detected on SPI\"}");
+    } else {
+        tcFirebox.setThermocoupleType(MAX31856_TCTYPE_K);
+        tcFirebox.setConversionMode(MAX31856_CONTINUOUS);
     }
 #endif
 #if TC_WATER_TEST_ENABLE
     if (!tcWater.begin()) {
         Serial.println("{\"status\":\"warn\",\"msg\":\"Water MAX31856 not detected on SPI\"}");
+    } else {
+        tcWater.setThermocoupleType(MAX31856_TCTYPE_K);
+        tcWater.setConversionMode(MAX31856_CONTINUOUS);
     }
 #endif
 }
